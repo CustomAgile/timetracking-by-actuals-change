@@ -1,0 +1,1830 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Time Tracking By Actuals Change</title>
+    <!--  (c) 2015 Rally Software Development Corp.  All Rights Reserved. -->
+    <!--  Build Date: Thu Sep 15 2016 16:07:37 GMT-0700 (PDT) -->
+    
+    <script type="text/javascript">
+        var APP_BUILD_DATE = "Thu Sep 15 2016 16:07:37 GMT-0700 (PDT)";
+        var CHECKSUM = 75013285266;
+    </script>
+    
+    <script type="text/javascript" src="/apps/2.1/sdk.js"></script>
+
+    <script type="text/javascript">
+        Rally.onReady(function() {
+             
+/**
+ * A link that pops up a version dialog box
+ */
+
+Ext.define('Rally.technicalservices.InfoLink',{
+    extend: 'Rally.ui.dialog.Dialog',
+    alias: 'widget.tsinfolink',
+    
+    /**
+     * @cfg {String} informationHtml
+     * Additional text to be displayed on the popup dialog (for exmaple,
+     * to add a description of the app's use or functionality)
+     */
+    informationHtml: null,
+    
+    /**
+     * 
+     * cfg {String} title
+     * The title for the dialog box
+     */
+    title: "Build Information",
+    
+    defaults: { padding: 5, margin: 5 },
+
+    closable: true,
+     
+    draggable: true,
+
+    autoShow: true,
+   
+    width: 350, 
+    
+    initComponent: function() {
+        var id = Ext.id(this);
+        this.title =  "<span class='icon-help'> </span>" + this.title;
+        this.callParent(arguments);
+    },
+    
+    _generateChecksum: function(string){
+        var chk = 0x12345678,
+            i;
+        string = string.replace(/var CHECKSUM = .*;/,"");
+        string = string.replace(/\s/g,"");  //Remove all whitespace from the string.
+        
+        for (i = 0; i < string.length; i++) {
+            chk += (string.charCodeAt(i) * i);
+        }
+    
+        return chk;
+    },
+    
+    _checkChecksum: function(container) {
+        var deferred = Ext.create('Deft.Deferred');
+        console.log("_checkChecksum", container);
+        var me = this;
+        
+        Ext.Ajax.request({
+            url: document.URL,
+            params: {
+                id: 1
+            },
+            success: function (response) {
+                text = response.responseText;
+                if ( CHECKSUM ) {
+                    if ( CHECKSUM !== me._generateChecksum(text) ) {
+                        console.log("Checksums don't match!");
+                        deferred.resolve(false);
+                        return;
+                    }
+                }
+                deferred.resolve(true);
+            }
+        });
+        
+        return deferred.promise;
+    },
+    
+    afterRender: function() {
+        var app = Rally.getApp();
+        
+        if (! app.isExternal() ) {
+                
+            this._checkChecksum(app).then({
+                scope: this,
+                success: function(result){
+                    if ( !result ) {
+                        this.addDocked({
+                            xtype:'container',
+                            cls: 'build-info',
+                            padding: 2,
+                            html:'<span class="icon-warning"> </span>Checksums do not match'
+                        });
+                    }
+                },
+                failure: function(msg){
+                    console.log("oops:",msg);
+                }
+            });
+        } else {
+            this.addDocked({
+                xtype:'container',
+                cls: 'build-info',
+                padding: 2,
+                html:'... Running externally'
+            });
+        }
+        this.callParent(arguments);
+    },
+    
+    beforeRender: function() {
+        var me = this;
+        this.callParent(arguments);
+
+        if (this.informationHtml) {
+            this.addDocked({
+                xtype: 'component',
+                componentCls: 'intro-panel',
+                padding: 2,
+                html: this.informationHtml
+            });
+        }
+        
+        this.addDocked({
+            xtype:'container',
+            cls: 'build-info',
+            padding: 2,
+            html:"This app was created by the Rally Technical Services Team."
+        });
+        
+        if ( APP_BUILD_DATE ) {
+            this.addDocked({
+                xtype:'container',
+                cls: 'build-info',
+                padding: 2,
+                html:'Build date/time: ' + APP_BUILD_DATE
+            });
+        }
+    }
+});
+
+/*
+ */
+Ext.define('Rally.technicalservices.Logger',{
+    constructor: function(config){
+        Ext.apply(this,config);
+    },
+    log: function(args){
+        var timestamp = "[ " + Ext.util.Format.date(new Date(), "Y-m-d H:i:s.u") + " ]";
+        //var output_args = arguments;
+        //output_args.unshift( [ "[ " + timestamp + " ]" ] );
+        //output_args = Ext.Array.push(output_args,arguments);
+        
+        var output_args = [];
+        output_args = Ext.Array.push(output_args,[timestamp]);
+        output_args = Ext.Array.push(output_args, Ext.Array.slice(arguments,0));
+
+        window.console && console.log.apply(console,output_args);
+    }
+
+});
+
+Ext.define("TSTimeTrackingByActualsChange", {
+    extend: 'Rally.app.App',
+    componentCls: 'app',
+    logger: new Rally.technicalservices.Logger(),
+    defaults: { margin: 10 },
+    layout: { type: 'border' }, 
+    
+    feature_path: 'PortfolioItem/Feature',
+    epic_path: 'PortfolioItem/Epic',
+    
+    items: [
+        {xtype:'container',itemId:'selector_box', region: 'north', layout: { type: 'hbox' }},
+        {xtype:'container',itemId:'display_box', region: 'center', layout: { type: 'fit' } }
+    ],
+    
+    start_date: null,
+    end_date  : null,
+    
+    config: {
+        defaultSettings: {
+            typeField: 'State',
+            productField: 'c_Driver'
+        }
+    },
+    
+    launch: function() {
+        var me = this;
+        this._getPortfolioItemNames().then({
+            scope: this,
+            success: function(types) {
+                this.feature_path = types[0].get('TypePath');
+                this.epic_path = types[1].get('TypePath');
+                
+                this._addSelectors(this.down('#selector_box'));
+            }
+        });
+    },
+    
+    _addSelectors: function(container) {
+        container.removeAll();
+        
+        var date_container = container.add({ xtype:'container', layout: { type:'vbox' } });
+        var spacer = container.add({ xtype: 'container', flex: 1});
+        var right_container = container.add({xtype:'container'});
+        
+        date_container.add({
+            xtype:'rallydatefield',
+            itemId:'start_date_selector',
+            fieldLabel: 'Start:',
+            labelWidth: 45,
+            stateful: true,
+            stateId: 'rally_techservices_timebychange_start',
+            stateEvents: ['change'],
+            listeners: { 
+                scope: this,
+                change: function(db) {
+                    this.start_date = db.getValue();
+                }
+            }
+        });
+        
+        date_container.add({
+            xtype:'rallydatefield',
+            itemId:'end_date_selector',
+            fieldLabel: 'End:',
+            labelWidth: 45,
+            stateful: true,
+            stateId: 'rally_techservices_timebychange_end',
+            stateEvents: ['change'],
+            listeners: { 
+                scope: this,
+                change: function(db) {
+                    this.end_date = db.getValue();
+                    
+                }
+            }
+        });
+        
+        date_container.add({
+            xtype:'rallybutton',
+            itemId:'update_button',
+            text: '<span class="icon-snapshot"> </span>',
+            disabled: false,
+            listeners: {
+                scope: this,
+                click: function() {
+                    this._updateData();
+                }
+            }
+        });
+
+        right_container.add({
+            xtype:'rallybutton',
+            itemId:'export_button',
+            text: '<span class="icon-export"> </span>',
+            disabled: true,
+            listeners: {
+                scope: this,
+                click: function() {
+                    this._export();
+                }
+            }
+        });
+    },
+    
+    _updateData: function() {
+        var me = this;
+        this.logger.log('updateData');
+
+        if ( this._hasNeededDates() ) {
+            this.down('#display_box').removeAll();
+
+            var start_date = Rally.util.DateTime.toIsoString(this.start_date);
+            var end_date =   Rally.util.DateTime.toIsoString(this.end_date);
+            
+            if ( end_date < start_date ) {
+                var holder = end_date;
+                end_date = start_date;
+                start_date = holder;
+            }
+            
+            this.setLoading("Loading actuals...");
+
+            this._getTasksThatChanged(start_date, end_date).then({
+                scope: this,
+                failure: function(msg) {
+                    this.setLoading(false);
+                    Ext.Msg.alert("Problem loading Actuals", msg);
+                },
+                
+                success: function(snaps) {
+                    this.down('#display_box').removeAll();
+                    
+                    if ( snaps.length === 0 ) {
+                        this.down('#display_box').add({
+                            xtype:'container',
+                            html :'No changes found'
+                        });
+                        Rally.getApp().setLoading(false);
+                        return;
+                    }
+
+                    Rally.getApp().setLoading("Gathering current information...");
+
+                    var rows = this._getTasksFromSnaps(snaps);
+
+                    Deft.Chain.pipeline([
+                        function() { return this._findCurrentTaskValues(rows); },
+                        function(rows) { return this._setDefectsByOID(rows); }
+                    ],this).then({
+                        scope: this,
+                        success: function(rows) {
+                            
+                            Rally.getApp().setLoading("Gathering related information...");
+                            Deft.Chain.sequence([
+                                function() { return this._getStoriesByOID(rows); },
+                                function() { return this._getOwnersByOID(rows); }
+                            ],this).then({
+                                scope: this,
+                                success: function(results) {
+                                    var stories_by_oid = results[0];
+                                    var users_by_oid   = results[1];
+                                    this.setLoading('Calculating...');
+                                    
+                                    this._updateEpicInformation(rows,stories_by_oid);
+                                    this._updateOwnerInformation(rows,users_by_oid);
+                                    
+                                    Deft.Chain.pipeline([
+                                        function() {      return this._findMissingData(rows,stories_by_oid); },
+                                        function(rows) {  return this._getThemeDataFromRows(rows); }
+                                    ],this).then({
+                                        scope: this,
+                                        success: function(rows) {                                    
+                                            this._addGrid(rows); 
+                                            this.setLoading(false);
+                                        },
+                                        failure: function(msg) {
+                                            this.setLoading(false);
+                                            Ext.Msg.alert('Problem loading ancillary data',msg);
+                                        }
+                                    });
+                                },
+                                failure: function(msg) {
+                                    this.setLoading(false);
+                                    Ext.Msg.alert("Problem loading ancillary data", msg);
+                                }
+                            
+                            });
+                        }
+                    });
+                }
+            });
+        }
+    },
+    
+    _hasNeededDates: function() {
+        return ( this.start_date && this.end_date );
+    },
+    
+    _getTasksThatChanged: function(start_date,end_date) {
+        this.logger.log("_getTasksThatChanged", start_date, end_date);
+        
+        var config = {
+            filters: [
+                {property:'_TypeHierarchy', value:'Task'},
+                {property:'_ValidFrom',operator: '>=', value: start_date},
+                {property:'_ValidFrom',operator: '<=', value: end_date},
+                {property:'Actuals',operator:'>',value: 0},
+                {property:'_ProjectHierarchy', operator:'in', value: [this.getContext().getProject().ObjectID]},
+                {property:'_PreviousValues.Actuals', operator: 'exists', value: true}
+            ],
+            fetch: ['_PreviousValues.Actuals','FormattedID','Owner','Actuals','Name','WorkProduct', this.getSetting('typeField'), '_User'],
+            sorters: [{property:'_ValidFrom',direction:'ASC'}],
+            limit: 'Infinity'
+        };
+        return this._loadSnapshots(config);
+        
+    },
+    
+    _getTasksFromSnaps: function(snaps) {
+        this.logger.log("_getTasksFromSnaps",snaps);
+        var row_hash = {};
+        Ext.Array.each(snaps, function(snap){
+            var oid = snap.get('ObjectID');
+            var old_value = snap.get('_PreviousValues.Actuals');
+            var new_value = snap.get('Actuals');
+            var delta = new_value - old_value;
+            if ( !row_hash[oid] ) { 
+                row_hash[oid] = {
+                    __delta: 0
+                };
+            }
+            row_hash[oid].__delta = row_hash[oid].__delta + delta;
+            // apply the most current values of the records to the row
+            Ext.apply(row_hash[oid], snap.getData());
+        },this);
+        
+        return Ext.Object.getValues(row_hash);
+    },
+    
+    _getStoriesByOID: function(rows) {
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        var workproducts = Ext.Array.pluck(rows,'WorkProduct');
+        var unique_workproducts = Ext.Array.unique(workproducts);
+                
+        var filter_array = Ext.Array.map(unique_workproducts, function(wp) {
+            return { property: 'ObjectID', value: wp };
+        });
+        
+        this.logger.log("# of stories to fetch:", unique_workproducts.length);
+        
+        var chunk_size = 1000;
+        var array_of_filters = [];
+        while (filter_array.length > 0) {
+            array_of_filters.push(filter_array.splice(0, chunk_size));
+        }
+            
+        var promises = [];
+        Ext.Array.each(array_of_filters,function(filters) {
+            promises.push( function() {
+                var config = {
+                    filters: Rally.data.wsapi.Filter.or(filters),
+                    model  : 'HierarchicalRequirement',
+                    limit  : Infinity,
+                    fetch  : ['FormattedID','Name','Feature','Parent',me.getSetting('productField'),'Iteration','c_WorkType'],
+                    pageSize: 1000
+                };
+                return me._loadWSAPIItems(config);
+            });
+        });
+        
+        
+        Deft.Chain.sequence(promises,this).then({
+            success: function(stories) {
+                var stories_by_oid = {};
+                Ext.Array.each(Ext.Array.flatten(stories), function(story){
+                    stories_by_oid[story.get('ObjectID')] = story;
+                });
+                deferred.resolve(stories_by_oid);
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        return deferred.promise;
+    },
+    
+    _setDefectsByOID: function(rows) {
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        var workproducts = Ext.Array.pluck(rows,'WorkProduct');
+        var unique_workproducts = Ext.Array.unique(workproducts);
+
+        var filter_array = Ext.Array.map(unique_workproducts, function(wp) {
+            return { property: 'ObjectID', value: wp };
+        });
+        
+        this.logger.log("# of defects to fetch:", unique_workproducts.length);
+        
+        var chunk_size = 100;
+        var array_of_filters = [];
+        while (filter_array.length > 0) {
+            array_of_filters.push(filter_array.splice(0, chunk_size));
+        }
+            
+        var promises = [];
+        Ext.Array.each(array_of_filters,function(filters) {
+            promises.push( function() {
+                var config = {
+                    filters: Rally.data.wsapi.Filter.or(filters),
+                    model  : 'Defect',
+                    limit  : Infinity,
+                    fetch  : ['FormattedID','ObjectID','Name','Feature','Parent',me.getSetting('productField'),'Iteration','c_WorkType','Requirement']
+                };
+                return me._loadWSAPIItems(config);
+            });
+        });
+        
+        Deft.Chain.sequence(promises,this).then({
+            success: function(defects) {
+                var defects_by_oid = {};
+                Ext.Array.each(Ext.Array.flatten(defects), function(defect){
+                    defects_by_oid[defect.get('ObjectID')] = defect;
+                });
+                
+                Ext.Array.each(rows, function(row) {
+                    var wp_oid = row.WorkProduct;
+                    if ( ! Ext.isEmpty(defects_by_oid[wp_oid]) ) {
+                        row.__Defect = defects_by_oid[wp_oid].getData();
+                        if ( row.__Defect.Requirement && row.__Defect.Requirement.ObjectID ) {
+                            row.WorkProduct = row.__Defect.Requirement.ObjectID;
+                        }
+                    }
+                
+                });
+                deferred.resolve(rows);
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        return deferred.promise;
+    },
+    
+    _getOwnersByOID: function(rows) {
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        var owners = Ext.Array.pluck(rows,'_User');
+        var unique_owners = Ext.Array.unique(owners);
+        this.logger.log("# of owners to fetch:", unique_owners.length);
+
+        var filter_array = Ext.Array.map(unique_owners, function(owner) {
+            return { property: 'ObjectID', value: owner };
+        });
+        
+        var chunk_size = 100;
+        var array_of_filters = [];
+        while (filter_array.length > 0) {
+            array_of_filters.push(filter_array.splice(0, chunk_size));
+        }
+            
+        var promises = [];
+        Ext.Array.each(array_of_filters,function(filters) {
+            promises.push( function() {
+                var config = {
+                    filters: Rally.data.wsapi.Filter.or(filters),
+                    model  : 'User',
+                    limit  : Infinity,
+                    fetch  : ['UserName','CostCenter','OfficeLocation','Department','Role']
+                };
+                return me._loadWSAPIItems(config);
+            });
+        });
+        
+        
+        Deft.Chain.sequence(promises,this).then({
+            success: function(users) {
+                var users_by_oid = {};
+                Ext.Array.each(Ext.Array.flatten(users), function(user){
+                    users_by_oid[user.get('ObjectID')] = user;
+                });
+                deferred.resolve(users_by_oid);
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        return deferred.promise;
+    },
+    
+    _getThemeDataFromRows: function(rows) {
+        var deferred = Ext.create('Deft.Deferred');
+        this.logger.log('_getThemeDataFromRows');
+        
+        var epic_fids = Ext.Array.pluck(rows, '__epic');
+        var unique_epic_fids = Ext.Array.unique(epic_fids);
+        
+        var filters = Ext.Array.map(unique_epic_fids, function(epic_fid){
+            return { property:'FormattedID', value:epic_fid };
+        });
+        
+        if ( filters.length === 0 ) {
+            filters = [{property:'ObjectID',value:-1}]; // to deal with deferred even if we don't have to query
+        }
+        
+        var config = {
+            filters: Rally.data.wsapi.Filter.or(filters),
+            model  : this.epic_path,
+            limit  : Infinity,
+            context: { project: null },
+            fetch  : ['FormattedID','Name','Parent']
+        };
+        
+        this._loadWSAPIItems(config).then({
+            success: function(epics) {
+                var epics_by_fid = {};
+                Ext.Array.each(epics, function(epic){
+                    epics_by_fid[epic.get('FormattedID')] = epic;
+                });
+                                
+                Ext.Array.each(rows, function(row) {
+                    var epic_id = row.__epic;
+
+                    row.__epic_name = "--";
+                    row.__theme = "--";
+                    row.__theme_name = "--";
+                    
+                    if ( !Ext.isEmpty(epic_id) ) {
+                        var epic = epics_by_fid[epic_id];
+
+                        //if ( epic && epic.get('Parent') ) {
+                        if ( epic ) {
+                            row.__epic_name = epic.get('Name');
+                            if ( epic.get('Parent') ) {
+                            row.__theme = epic.get('Parent').FormattedID;
+                            row.__theme_name = epic.get('Parent').Name;
+                            }
+                        }
+                    } 
+                     
+                });
+                deferred.resolve(rows);
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        return deferred;
+    },
+    
+    _findCurrentTaskValues: function(rows) {
+        // snapshots from lookback have the value of fields at the time the 
+        // snap was taken
+        this.logger.log('_findCurrentTaskValues',rows.length);
+        var deferred = Ext.create('Deft.Deferred');
+        this.setLoading('Fetching current task data...');
+
+        var me = this;
+        var project_field = this.getSetting('typeField');
+        
+        var rows_by_oid = {};
+        Ext.Array.each(rows, function(row) {
+            rows_by_oid[row.ObjectID] = row;
+        });
+        
+        var task_oids = Ext.Array.pluck(rows,'ObjectID');
+        
+        this.logger.log("# of tasks to fetch:", task_oids.length);
+        
+        var filter_array = task_oids;
+        
+        var chunk_size = 300;
+        if ( !this.isExternal() ) {
+            chunk_size = 1000;
+        }
+        var array_for_filters = [];
+        while (filter_array.length > 0) {
+            array_for_filters.push(filter_array.splice(0, chunk_size));
+        }
+        
+            
+        var promises = [];
+        Ext.Array.each(array_for_filters,function(filters) {
+            //var filters: Rally.data.wsapi.Filter.or(filters),
+            var filters = [
+                {property:'_TypeHierarchy', value:'Task'},
+                {property:'ObjectID',operator:'in',value:filters},
+                {property: '__At',value: 'current'}
+            ];
+            
+            promises.push( function() {
+                var config = {
+                    filters: filters,
+                    fetch  : ['Name',project_field,'WorkProduct'],
+                    useHttpPost: true
+                };
+                return me._loadSnapshots(config);
+            });
+        });
+        
+        
+        Deft.Chain.sequence(promises,this).then({
+            success: function(tasks) {
+                Ext.Array.each(Ext.Array.flatten(tasks), function(task){
+                    Ext.apply(rows_by_oid[task.get('ObjectID')], task.getData());
+                });
+                
+                var found_tasks_by_oid = {};
+                Ext.Array.each(Ext.Array.flatten(tasks), function(task) { found_tasks_by_oid[task.get('ObjectID')] = task; });
+                
+                Ext.Array.each(rows, function(row) {
+                    var oid = row.ObjectID;
+                     
+                    if ( Ext.isEmpty(found_tasks_by_oid[oid]) ) {
+                        row.__Deleted = true;
+                    } else {
+                        row.__Deleted = false;
+                    }
+                });
+                
+                deferred.resolve(Ext.Object.getValues(rows_by_oid));
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        
+        return deferred.promise;
+    },
+    
+    _findMissingData: function(rows, stories_by_oid) {
+        this.logger.log('_findMissingData',rows.length);
+        // sometimes the data seems to lose its connection to its feature or to the epic above it
+        var deferred = Ext.create('Deft.Deferred');
+        this.setLoading('Fetching missing data elements...');
+
+        // get the stories that we don't have the epics for
+        var features_missing_epics = [];
+        
+        Ext.Array.each(rows, function(row) {
+            var wp_oid = row.WorkProduct;
+            var story = stories_by_oid[wp_oid];
+
+            if ( story && story.get('Feature') ) {
+                var feature_id = story.get('Feature').FormattedID;
+                row.__featureID = feature_id;
+                
+                if ( row.__epic == "--" ) {
+                    features_missing_epics.push(feature_id);
+                }
+                
+            }
+        });
+        
+        features_missing_epics = Ext.Array.unique(features_missing_epics);
+        var filters = Ext.Array.map(features_missing_epics, function(feature_fid){
+            return { property:'FormattedID', value:feature_fid };
+        });
+        
+        if ( filters.length === 0 ) {
+            filters = [{property:'ObjectID',value:-1}]; // to deal with deferred even if we don't have to query
+        }
+        
+        var config = {
+            filters: Rally.data.wsapi.Filter.or(filters),
+            model  : this.feature_path,
+            limit  : Infinity,
+            context: { project: null },
+            fetch  : ['FormattedID','Name','Parent',this.getSetting('productField')]
+        };
+        
+        this._loadWSAPIItems(config).then({
+            success: function(features) {
+                var features_by_fid = {};
+                Ext.Array.each(features, function(feature){
+                    features_by_fid[feature.get('FormattedID')] = feature;
+                });
+                
+                Ext.Array.each(rows, function(row) {
+                    
+                    var feature_id = row.__featureID;
+
+                    if ( !Ext.isEmpty(feature_id) ) {
+                        var feature = features_by_fid[feature_id];
+
+                        if ( feature && feature.get('Parent') ) {
+                            row.__epic = feature.get('Parent').FormattedID;
+                    
+                            var product = feature.get('Parent')[Rally.getApp().getSetting('productField')];
+                            if ( Ext.isEmpty(product) ) {
+                                product = '--';
+                            }
+                            row.__epic_product = product;
+                        }
+                    } 
+                     
+                });
+                deferred.resolve(rows);
+            },
+            failure: function(msg) {
+                deferred.reject(msg);
+            }
+        });
+        
+        return deferred.promise;
+    },
+    
+    _updateEpicInformation: function(rows,stories_by_oid) {
+        this.logger.log('_updateEpicInformation', rows);
+        Ext.Array.each(rows, function(row){
+            var wp_oid = row.WorkProduct;
+            var story = stories_by_oid[wp_oid];
+            var defect = row.__Defect;
+            
+            if(story){
+                story = story.getData();
+            }
+            
+            // default values:
+            row.__epic = "--";
+            row.__epic_product = '--';
+            row.__story = '--';
+            row.__story_name = '--';
+            row.__story_type = "--";
+            row.__iteration = "--";
+            
+            if ( story ) {
+                row.__story_name = story.Name;
+                row.__story = story.FormattedID;
+                row.__story_type = story.c_WorkType;
+                
+                if(Ext.isEmpty(defect) && story && story.Iteration)
+                {
+                    row.__iteration = story.Iteration.Name;
+                }
+                if ( defect && defect.Iteration ) {
+                    row.__iteration = defect.Iteration.Name;
+                }
+                
+                if (story && story.Feature && story.Feature.Parent) {
+                    row.__epic = story.Feature.Parent.FormattedID;
+                    var product = story.Feature.Parent[this.getSetting('productField')];
+
+                    if ( Ext.isEmpty(product) ) {
+                        product = '--';
+                    }
+                    row.__epic_product = product;
+                } else if  ( story.Parent && story.Parent.Feature && story.Parent.Feature.Parent ) {
+                    row.__epic = story.Parent.Feature.Parent.FormattedID
+                    var product = story.Parent.Feature.Parent[this.getSetting('productField')];
+                    if ( Ext.isEmpty(product) ) {
+                        product = '--';
+                    }
+                    row.__epic_product = product;
+                } else if ( story.Parent && story.Parent.Feature ) {
+                    var product = story.Parent.Feature[this.getSetting('productField')];
+                    if ( story.Iteration ) {
+                        row.__iteration = story.Iteration.Name;
+                    }
+                    
+                    if ( Ext.isEmpty(product) ) {
+                        product = "--";
+                    }
+                    
+                    row.__epic_product = product;
+                }
+                
+            }
+        },this);
+    },
+    
+    _updateOwnerInformation: function(rows,users_by_oid) {
+        this.logger.log('_updateOwnerInformation');
+        
+        Ext.Array.each(rows, function(row){
+            var owner_oid = row._User;
+            var owner = users_by_oid[owner_oid];
+
+            row.__owner = owner;
+                        
+            if (owner) {
+                row.__owner_cost_center = owner.get('CostCenter');
+                row.__owner_role = owner.get('Role');
+                row.__owner_department = owner.get('Department');
+                row.__owner_location = owner.get('OfficeLocation');
+            } else {
+                row.__owner_cost_center = '';
+                row.__owner_department = '';
+                row.__owner_location = '';
+                row.__owner_role = '';
+            }
+
+        },this);
+    },
+    
+    _loadSnapshots: function(config) {
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        this.logger.log("Starting snapshot load", config.filters);
+        
+        var default_config = {
+            fetch: ['ObjectID'],
+            removeUnauthorizedSnapshots: true
+        };
+        
+        Ext.create('Rally.data.lookback.SnapshotStore', Ext.merge(default_config,config)).load({
+            callback : function(records, operation, successful) {
+                if (successful){
+                    deferred.resolve(records);
+                } else {
+                    me.logger.log("Failed: ", operation);
+                    deferred.reject('Problem loading: ' + operation.error.errors.join('. '));
+                }
+            }
+        });
+        return deferred.promise;
+    },
+    
+    _loadWSAPIItems: function(config){
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        
+        this.logger.log(config.model, "Loading with filters: ", Ext.clone(config.filters));
+        
+        var default_config = {
+            fetch: ['ObjectID'],
+            enablePostGet: true
+        };
+        
+        Ext.create('Rally.data.wsapi.Store', Ext.merge(default_config,config)).load({
+            callback : function(records, operation, successful) {
+                if (successful){
+                    deferred.resolve(records);
+                } else {
+                    me.logger.log("Failed: ", operation);
+                    deferred.reject('Problem loading: ' + operation.error.errors.join('. '));
+                }
+            }
+        });
+        return deferred.promise;
+    },
+    
+    _addGrid: function(rows){
+        this.logger.log('_addGrid', rows);
+        
+        this.down('#display_box').removeAll();
+        var store = Ext.create('Rally.data.custom.Store',{
+            data:rows
+        });
+        
+        this.down('#display_box').add({
+            xtype:'rallygrid',
+            store: store,
+            showPagingToolbar: true,
+            columnCfgs: [
+                {dataIndex:'FormattedID', text:'Task Number', renderer: function(value, meta, record) {
+                    var url = Rally.nav.Manager.getDetailUrl( '/task/' + record.get('ObjectID') );
+                    if ( record.get('__Deleted') ) { 
+                        return value + " (del)";
+                    }
+                    return Ext.String.format("<a href={0} target='_blank'>{1}</a>", url, value);
+                }, _csvIgnoreRender: true},
+                {dataIndex: this.getSetting('typeField'), text: 'Task Type' , renderer:function(value,meta,record){
+                    if(!Ext.isEmpty(value)){
+                        return value;
+                    }
+                    return record.get("__story_type");
+                }
+                },
+                {dataIndex:'__owner', text:'Owner', renderer: function(v) {
+                    if ( Ext.isEmpty(v) ) {
+                        return "--";
+                    }
+                    return v.get('_refObjectName');
+                }},
+                //{dataIndex:'__owner_cost_center', text:'Cost Center' },
+                {dataIndex:'__owner_department', text:'Department' },
+                {dataIndex:'__owner_location', text:'Office Location' },
+                {dataIndex:'__owner_role', text:'Role' },
+
+                {dataIndex:'__delta', text:'Actual Time'},
+                {dataIndex: '__epic_product', text:'Product' },
+                {dataIndex:'__story', text: 'Story ID' },
+                {dataIndex:'__story_name', text: 'Story Name'},
+                {dataIndex:'__iteration', text: 'Sprint'},
+                {dataIndex:'__epic', text: 'Epic ID'},
+                {dataIndex:'__epic_name', text: 'Epic Name'},
+                {dataIndex:'__theme', text:'Theme ID'},
+                {dataIndex:'__theme_name', text: 'Theme Name'}
+            ],
+            listeners: {
+                scope: this,
+                viewready: function() {
+                    this.down('#export_button') && this.down('#export_button').setDisabled(false);
+                },
+                destroy: function() {
+                    this.down('#export_button') && this.down('#export_button').setDisabled(true);
+                }
+            }
+        });
+    },
+    
+    _export: function(){
+        var grid = this.down('rallygrid');
+        var me = this;
+        
+        if ( !grid ) { return; }
+        
+        this.logger.log('_export',grid);
+
+        var filename = Ext.String.format('task-report.csv');
+
+        this.setLoading("Generating CSV");
+        Deft.Chain.sequence([
+            function() { return Rally.technicalservices.FileUtilities.getCSVFromGrid(this,grid) } 
+        ]).then({
+            scope: this,
+            success: function(csv){
+                if (csv && csv.length > 0){
+                    Rally.technicalservices.FileUtilities.saveCSVToFile(csv,filename);
+                } else {
+                    Rally.ui.notify.Notifier.showWarning({message: 'No data to export'});
+                }
+                
+            }
+        }).always(function() { me.setLoading(false); });
+    },
+    
+    _getPortfolioItemNames: function() {
+        var config = {
+            model: 'TypeDefinition', 
+            fetch: ["TypePath","Ordinal"],
+            filters: [{property:'TypePath', operator:'contains', value:'PortfolioItem/'}],
+            sorters: [{property:'Ordinal',direction:'ASC'}]
+        };
+        
+        return this._loadWSAPIItems(config);
+    },
+    
+    getOptions: function() {
+        return [
+            {
+                text: 'About...',
+                handler: this._launchInfo,
+                scope: this
+            }
+        ];
+    },
+    
+    _launchInfo: function() {
+        if ( this.about_dialog ) { this.about_dialog.destroy(); }
+        this.about_dialog = Ext.create('Rally.technicalservices.InfoLink',{});
+    },
+    
+    isExternal: function(){
+        return typeof(this.getAppId()) == 'undefined';
+    },
+    
+    //onSettingsUpdate:  Override
+    onSettingsUpdate: function (settings){
+        this.logger.log('onSettingsUpdate',settings);
+        // Ext.apply(this, settings);
+        this.launch();
+    },
+    
+    _filterOutExceptChoices: function(store) {
+        var app = Rally.getApp();
+        app.logger.log('_filterOutExceptChoices');
+        
+        store.filter([{
+            filterFn:function(field){                 
+                var attribute_definition = field.get('fieldDefinition').attributeDefinition;
+                var attribute_type = null;
+                if ( attribute_definition ) {
+                    attribute_type = attribute_definition.AttributeType;
+                }
+                if (  attribute_type == "BOOLEAN" ) {
+                    return true;
+                }
+                if ( attribute_type == "STRING" || attribute_type == "State" ) {
+                    if ( field.get('fieldDefinition').attributeDefinition.Constrained ) {
+                        return true;
+                    }
+                }
+                return false;
+            } 
+        }]);
+    },
+    
+    getSettingsFields: function() {
+        var me = this;
+        
+        return [{
+            name: 'typeField',
+            xtype: 'rallyfieldcombobox',
+            fieldLabel: 'Task Type Field',
+            labelWidth: 85,
+            width: 250,
+            margin: 10,
+            model: 'Task',
+            listeners: {
+                ready: function(field_box) {
+                    me._filterOutExceptChoices(field_box.getStore());
+                }
+            },
+            //readyEvent: 'ready'
+        },
+        {
+            name: 'productField',
+            xtype: 'rallyfieldcombobox',
+            fieldLabel: 'Product Field',
+            labelWidth: 85,
+            width: 250,
+            margin: '10 10 175 10',
+            model: 'PortfolioItem',
+            listeners: {
+                ready: function(field_box) {
+                    me._filterOutExceptChoices(field_box.getStore());
+                }
+            },
+            //readyEvent: 'ready'
+        }];
+    }
+});
+/* Blob.js
+ * A Blob implementation.
+ * 2014-05-31
+ * 
+ * By Eli Grey, http://eligrey.com
+ * By Devin Samarin, https://github.com/eboyjr
+ * License: X11/MIT
+ *   See https://github.com/eligrey/Blob.js/blob/master/LICENSE.md
+ */
+
+/*global self, unescape */
+/*jslint bitwise: true, regexp: true, confusion: true, es5: true, vars: true, white: true,
+  plusplus: true */
+
+/*! @source http://purl.eligrey.com/github/Blob.js/blob/master/Blob.js */
+
+(function (view) {
+    "use strict";
+
+    view.URL = view.URL || view.webkitURL;
+
+    if (view.Blob && view.URL) {
+        try {
+            new Blob;
+            return;
+        } catch (e) {}
+    }
+
+    // Internally we use a BlobBuilder implementation to base Blob off of
+    // in order to support older browsers that only have BlobBuilder
+    var BlobBuilder = view.BlobBuilder || view.WebKitBlobBuilder || view.MozBlobBuilder || (function(view) {
+        var
+              get_class = function(object) {
+                return Object.prototype.toString.call(object).match(/^\[object\s(.*)\]$/)[1];
+            }
+            , FakeBlobBuilder = function BlobBuilder() {
+                this.data = [];
+            }
+            , FakeBlob = function Blob(data, type, encoding) {
+                this.data = data;
+                this.size = data.length;
+                this.type = type;
+                this.encoding = encoding;
+            }
+            , FBB_proto = FakeBlobBuilder.prototype
+            , FB_proto = FakeBlob.prototype
+            , FileReaderSync = view.FileReaderSync
+            , FileException = function(type) {
+                this.code = this[this.name = type];
+            }
+            , file_ex_codes = (
+                  "NOT_FOUND_ERR SECURITY_ERR ABORT_ERR NOT_READABLE_ERR ENCODING_ERR "
+                + "NO_MODIFICATION_ALLOWED_ERR INVALID_STATE_ERR SYNTAX_ERR"
+            ).split(" ")
+            , file_ex_code = file_ex_codes.length
+            , real_URL = view.URL || view.webkitURL || view
+            , real_create_object_URL = real_URL.createObjectURL
+            , real_revoke_object_URL = real_URL.revokeObjectURL
+            , URL = real_URL
+            , btoa = view.btoa
+            , atob = view.atob
+            
+            , ArrayBuffer = view.ArrayBuffer
+            , Uint8Array = view.Uint8Array
+        ;
+        FakeBlob.fake = FB_proto.fake = true;
+        while (file_ex_code--) {
+            FileException.prototype[file_ex_codes[file_ex_code]] = file_ex_code + 1;
+        }
+        if (!real_URL.createObjectURL) {
+            URL = view.URL = {};
+        }
+        URL.createObjectURL = function(blob) {
+            var
+                  type = blob.type
+                , data_URI_header
+            ;
+            if (type === null) {
+                type = "application/octet-stream";
+            }
+            if (blob instanceof FakeBlob) {
+                data_URI_header = "data:" + type;
+                if (blob.encoding === "base64") {
+                    return data_URI_header + ";base64," + blob.data;
+                } else if (blob.encoding === "URI") {
+                    return data_URI_header + "," + decodeURIComponent(blob.data);
+                } if (btoa) {
+                    return data_URI_header + ";base64," + btoa(blob.data);
+                } else {
+                    return data_URI_header + "," + encodeURIComponent(blob.data);
+                }
+            } else if (real_create_object_URL) {
+                return real_create_object_URL.call(real_URL, blob);
+            }
+        };
+        URL.revokeObjectURL = function(object_URL) {
+            if (object_URL.substring(0, 5) !== "data:" && real_revoke_object_URL) {
+                real_revoke_object_URL.call(real_URL, object_URL);
+            }
+        };
+        FBB_proto.append = function(data/*, endings*/) {
+            var bb = this.data;
+            // decode data to a binary string
+            if (Uint8Array && (data instanceof ArrayBuffer || data instanceof Uint8Array)) {
+                var
+                      str = ""
+                    , buf = new Uint8Array(data)
+                    , i = 0
+                    , buf_len = buf.length
+                ;
+                for (; i < buf_len; i++) {
+                    str += String.fromCharCode(buf[i]);
+                }
+                bb.push(str);
+            } else if (get_class(data) === "Blob" || get_class(data) === "File") {
+                if (FileReaderSync) {
+                    var fr = new FileReaderSync;
+                    bb.push(fr.readAsBinaryString(data));
+                } else {
+                    // async FileReader won't work as BlobBuilder is sync
+                    throw new FileException("NOT_READABLE_ERR");
+                }
+            } else if (data instanceof FakeBlob) {
+                if (data.encoding === "base64" && atob) {
+                    bb.push(atob(data.data));
+                } else if (data.encoding === "URI") {
+                    bb.push(decodeURIComponent(data.data));
+                } else if (data.encoding === "raw") {
+                    bb.push(data.data);
+                }
+            } else {
+                if (typeof data !== "string") {
+                    data += ""; // convert unsupported types to strings
+                }
+                // decode UTF-16 to binary string
+                bb.push(unescape(encodeURIComponent(data)));
+            }
+        };
+        FBB_proto.getBlob = function(type) {
+            if (!arguments.length) {
+                type = null;
+            }
+            return new FakeBlob(this.data.join(""), type, "raw");
+        };
+        FBB_proto.toString = function() {
+            return "[object BlobBuilder]";
+        };
+        FB_proto.slice = function(start, end, type) {
+            var args = arguments.length;
+            if (args < 3) {
+                type = null;
+            }
+            return new FakeBlob(
+                  this.data.slice(start, args > 1 ? end : this.data.length)
+                , type
+                , this.encoding
+            );
+        };
+        FB_proto.toString = function() {
+            return "[object Blob]";
+        };
+        FB_proto.close = function() {
+            this.size = 0;
+            delete this.data;
+        };
+        return FakeBlobBuilder;
+    }(view));
+
+    view.Blob = function Blob(blobParts, options) {
+        var type = options ? (options.type || "") : "";
+        var builder = new BlobBuilder();
+        if (blobParts) {
+            for (var i = 0, len = blobParts.length; i < len; i++) {
+                builder.append(blobParts[i]);
+            }
+        }
+        return builder.getBlob(type);
+    };
+}(typeof self !== "undefined" && self || typeof window !== "undefined" && window || this.content || this));
+/* FileSaver.js
+ *  A saveAs() FileSaver implementation.
+ *  2014-05-27
+ *
+ *  By Eli Grey, http://eligrey.com
+ *  License: X11/MIT
+ *    See https://github.com/eligrey/FileSaver.js/blob/master/LICENSE.md
+ */
+
+/*global self */
+/*jslint bitwise: true, indent: 4, laxbreak: true, laxcomma: true, smarttabs: true, plusplus: true */
+
+/*! @source http://purl.eligrey.com/github/FileSaver.js/blob/master/FileSaver.js */
+
+var saveAs = saveAs
+  // IE 10+ (native saveAs)
+  || (typeof navigator !== "undefined" &&
+      navigator.msSaveOrOpenBlob && navigator.msSaveOrOpenBlob.bind(navigator))
+  // Everyone else
+  || (function(view) {
+    "use strict";
+    // IE <10 is explicitly unsupported
+    if (typeof navigator !== "undefined" &&
+        /MSIE [1-9]\./.test(navigator.userAgent)) {
+        return;
+    }
+    var
+          doc = view.document
+          // only get URL when necessary in case Blob.js hasn't overridden it yet
+        , get_URL = function() {
+            return view.URL || view.webkitURL || view;
+        }
+        , save_link = doc.createElementNS("http://www.w3.org/1999/xhtml", "a")
+        , can_use_save_link = !view.externalHost && "download" in save_link
+        , click = function(node) {
+            var event = doc.createEvent("MouseEvents");
+            event.initMouseEvent(
+                "click", true, false, view, 0, 0, 0, 0, 0
+                , false, false, false, false, 0, null
+            );
+            node.dispatchEvent(event);
+        }
+        , webkit_req_fs = view.webkitRequestFileSystem
+        , req_fs = view.requestFileSystem || webkit_req_fs || view.mozRequestFileSystem
+        , throw_outside = function(ex) {
+            (view.setImmediate || view.setTimeout)(function() {
+                throw ex;
+            }, 0);
+        }
+        , force_saveable_type = "application/octet-stream"
+        , fs_min_size = 0
+        , deletion_queue = []
+        , process_deletion_queue = function() {
+            var i = deletion_queue.length;
+            while (i--) {
+                var file = deletion_queue[i];
+                if (typeof file === "string") { // file is an object URL
+                    get_URL().revokeObjectURL(file);
+                } else { // file is a File
+                    file.remove();
+                }
+            }
+            deletion_queue.length = 0; // clear queue
+        }
+        , dispatch = function(filesaver, event_types, event) {
+            event_types = [].concat(event_types);
+            var i = event_types.length;
+            while (i--) {
+                var listener = filesaver["on" + event_types[i]];
+                if (typeof listener === "function") {
+                    try {
+                        listener.call(filesaver, event || filesaver);
+                    } catch (ex) {
+                        throw_outside(ex);
+                    }
+                }
+            }
+        }
+        , FileSaver = function(blob, name) {
+            // First try a.download, then web filesystem, then object URLs
+            var
+                  filesaver = this
+                , type = blob.type
+                , blob_changed = false
+                , object_url
+                , target_view
+                , get_object_url = function() {
+                    var object_url = get_URL().createObjectURL(blob);
+                    deletion_queue.push(object_url);
+                    return object_url;
+                }
+                , dispatch_all = function() {
+                    dispatch(filesaver, "writestart progress write writeend".split(" "));
+                }
+                // on any filesys errors revert to saving with object URLs
+                , fs_error = function() {
+                    // don't create more object URLs than needed
+                    if (blob_changed || !object_url) {
+                        object_url = get_object_url(blob);
+                    }
+                    if (target_view) {
+                        target_view.location.href = object_url;
+                    } else {
+                        window.open(object_url, "_blank");
+                    }
+                    filesaver.readyState = filesaver.DONE;
+                    dispatch_all();
+                }
+                , abortable = function(func) {
+                    return function() {
+                        if (filesaver.readyState !== filesaver.DONE) {
+                            return func.apply(this, arguments);
+                        }
+                    };
+                }
+                , create_if_not_found = {create: true, exclusive: false}
+                , slice
+            ;
+            filesaver.readyState = filesaver.INIT;
+            if (!name) {
+                name = "download";
+            }
+            if (can_use_save_link) {
+                object_url = get_object_url(blob);
+                save_link.href = object_url;
+                save_link.download = name;
+                click(save_link);
+                filesaver.readyState = filesaver.DONE;
+                dispatch_all();
+                return;
+            }
+            // Object and web filesystem URLs have a problem saving in Google Chrome when
+            // viewed in a tab, so I force save with application/octet-stream
+            // http://code.google.com/p/chromium/issues/detail?id=91158
+            if (view.chrome && type && type !== force_saveable_type) {
+                slice = blob.slice || blob.webkitSlice;
+                blob = slice.call(blob, 0, blob.size, force_saveable_type);
+                blob_changed = true;
+            }
+            // Since I can't be sure that the guessed media type will trigger a download
+            // in WebKit, I append .download to the filename.
+            // https://bugs.webkit.org/show_bug.cgi?id=65440
+            if (webkit_req_fs && name !== "download") {
+                name += ".download";
+            }
+            if (type === force_saveable_type || webkit_req_fs) {
+                target_view = view;
+            }
+            if (!req_fs) {
+                fs_error();
+                return;
+            }
+            fs_min_size += blob.size;
+            req_fs(view.TEMPORARY, fs_min_size, abortable(function(fs) {
+                fs.root.getDirectory("saved", create_if_not_found, abortable(function(dir) {
+                    var save = function() {
+                        dir.getFile(name, create_if_not_found, abortable(function(file) {
+                            file.createWriter(abortable(function(writer) {
+                                writer.onwriteend = function(event) {
+                                    target_view.location.href = file.toURL();
+                                    deletion_queue.push(file);
+                                    filesaver.readyState = filesaver.DONE;
+                                    dispatch(filesaver, "writeend", event);
+                                };
+                                writer.onerror = function() {
+                                    var error = writer.error;
+                                    if (error.code !== error.ABORT_ERR) {
+                                        fs_error();
+                                    }
+                                };
+                                "writestart progress write abort".split(" ").forEach(function(event) {
+                                    writer["on" + event] = filesaver["on" + event];
+                                });
+                                writer.write(blob);
+                                filesaver.abort = function() {
+                                    writer.abort();
+                                    filesaver.readyState = filesaver.DONE;
+                                };
+                                filesaver.readyState = filesaver.WRITING;
+                            }), fs_error);
+                        }), fs_error);
+                    };
+                    dir.getFile(name, {create: false}, abortable(function(file) {
+                        // delete file if it already exists
+                        file.remove();
+                        save();
+                    }), abortable(function(ex) {
+                        if (ex.code === ex.NOT_FOUND_ERR) {
+                            save();
+                        } else {
+                            fs_error();
+                        }
+                    }));
+                }), fs_error);
+            }), fs_error);
+        }
+        , FS_proto = FileSaver.prototype
+        , saveAs = function(blob, name) {
+            return new FileSaver(blob, name);
+        }
+    ;
+    FS_proto.abort = function() {
+        var filesaver = this;
+        filesaver.readyState = filesaver.DONE;
+        dispatch(filesaver, "abort");
+    };
+    FS_proto.readyState = FS_proto.INIT = 0;
+    FS_proto.WRITING = 1;
+    FS_proto.DONE = 2;
+
+    FS_proto.error =
+    FS_proto.onwritestart =
+    FS_proto.onprogress =
+    FS_proto.onwrite =
+    FS_proto.onabort =
+    FS_proto.onerror =
+    FS_proto.onwriteend =
+        null;
+
+    view.addEventListener("unload", process_deletion_queue, false);
+    saveAs.unload = function() {
+        process_deletion_queue();
+        view.removeEventListener("unload", process_deletion_queue, false);
+    };
+    return saveAs;
+}(
+       typeof self !== "undefined" && self
+    || typeof window !== "undefined" && window
+    || this.content
+));
+// `self` is undefined in Firefox for Android content script context
+// while `this` is nsIContentFrameMessageManager
+// with an attribute `content` that corresponds to the window
+
+if (typeof module !== "undefined" && module !== null) {
+  module.exports = saveAs;
+} else if ((typeof define !== "undefined" && define !== null) && (define.amd != null)) {
+  define([], function() {
+    return saveAs;
+  });
+}
+Ext.define('Rally.technicalservices.FileUtilities', {
+    singleton: true,
+    logger: new Rally.technicalservices.Logger(),
+    saveCSVToFile:function(csv,file_name,type_object){
+            if (type_object == undefined){
+                type_object = {type:'text/csv;charset=utf-8'};
+            }
+            var blob = new Blob([csv],type_object);
+            saveAs(blob,file_name);
+    },
+    saveTextAsFile: function(textToWrite, fileName)
+    {
+        var textFileAsBlob = new Blob([textToWrite], {type:'text/plain'});
+        var fileNameToSaveAs = fileName;
+
+        var downloadLink = document.createElement("a");
+        downloadLink.download = fileNameToSaveAs;
+        downloadLink.innerHTML = "Download File";
+        if (window.webkitURL != null)
+        {
+            // Chrome allows the link to be clicked
+            // without actually adding it to the DOM.
+            downloadLink.href = window.webkitURL.createObjectURL(textFileAsBlob);
+        }
+        else
+        {
+            // Firefox requires the link to be added to the DOM
+            // before it can be clicked.
+            downloadLink.href = window.URL.createObjectURL(textFileAsBlob);
+            downloadLink.onclick = destroyClickedElement;
+            downloadLink.style.display = "none";
+            document.body.appendChild(downloadLink);
+        }
+        downloadLink.click();
+    },
+    destroyClickedElement: function(event)
+    {
+        document.body.removeChild(event.target);
+    },
+    convertDataArrayToCSVText: function(data_array, requestedFieldHash){
+       
+        var text = '';
+        Ext.each(Object.keys(requestedFieldHash), function(key){
+            text += requestedFieldHash[key] + ',';
+        });
+        text = text.replace(/,$/,'\n');
+        
+        Ext.each(data_array, function(d){
+            Ext.each(Object.keys(requestedFieldHash), function(key){
+                if (d[key]){
+                    if (typeof d[key] === 'object'){
+                        if (d[key].FormattedID) {
+                            text += Ext.String.format("\"{0}\",",d[key].FormattedID ); 
+                        } else if (d[key].Name) {
+                            text += Ext.String.format("\"{0}\",",d[key].Name );                    
+                        } else if (!isNaN(Date.parse(d[key]))){
+                            text += Ext.String.format("\"{0}\",",Rally.util.DateTime.formatWithDefaultDateTime(d[key]));
+                        }else {
+                            text += Ext.String.format("\"{0}\",",d[key].toString());
+                        }
+                    } else {
+                        text += Ext.String.format("\"{0}\",",d[key] );                    
+                    }
+                } else {
+                    text += ',';
+                }
+            },this);
+            text = text.replace(/,$/,'\n');
+        },this);
+        return text;
+    },
+    _getCSVFromWsapiBackedGrid: function(grid) {
+        var deferred = Ext.create('Deft.Deferred');
+        var store = Ext.create('Rally.data.wsapi.Store',{
+            fetch: grid.getStore().config.fetch,
+            filters: grid.getStore().config.filters,
+            model: grid.getStore().config.model,
+            pageSize: 200
+        });
+        
+        var columns = grid.columns;
+        var headers = this._getHeadersFromGrid(grid);
+        var column_names = this._getColumnNamesFromGrid(grid);
+        
+        var record_count = grid.getStore().getTotalCount(),
+            page_size = grid.getStore().pageSize,
+            pages = Math.ceil(record_count/page_size),
+            promises = [];
+
+        for (var page = 1; page <= pages; page ++ ) {
+            promises.push(this._loadStorePage(grid, store, columns, page, pages));
+        }
+        Deft.Promise.all(promises).then({
+            success: function(csvs){
+                var csv = [];
+                csv.push('"' + headers.join('","') + '"');
+                _.each(csvs, function(c){
+                    _.each(c, function(line){
+                        csv.push(line);
+                    });
+                });
+                csv = csv.join('\r\n');
+                deferred.resolve(csv);
+                Rally.getApp().setLoading(false);
+            }
+        });
+        return deferred.promise;
+    },
+    
+    // custom grid assumes there store is fully loaded
+    _getCSVFromCustomBackedGrid: function(grid) {
+        var deferred = Ext.create('Deft.Deferred');
+        var me = this;
+        
+        Rally.getApp().setLoading("Assembling data for export...");
+        
+        var headers = this._getHeadersFromGrid(grid);
+        var store = Ext.clone( grid.getStore() );
+        var columns = grid.columns;
+        var column_names = this._getColumnNamesFromGrid(grid);
+        
+        var record_count = grid.getStore().getTotalCount();
+        var original_page_size = grid.getStore().pageSize;
+        
+        var page_size = 200;
+        var number_of_pages = Math.ceil(record_count/page_size);
+        store.pageSize = page_size;
+        
+        var pages = [],
+            promises = [];
+
+        for (var page = 1; page <= number_of_pages; page ++ ) {
+            pages.push(page);
+        }
+        
+        Ext.Array.each(pages, function(page) {
+            promises.push(function() { return me._loadStorePage(grid, store, columns, page, pages.length )} );
+        });
+        
+        Deft.Chain.sequence(promises).then({
+            success: function(csvs){
+
+                // set page back to last view
+                store.pageSize = original_page_size;
+                store.loadPage(1);
+                
+                var csv = [];
+                csv.push('"' + headers.join('","') + '"');
+                _.each(csvs, function(c){
+                    _.each(c, function(line){
+                        csv.push(line);
+                    });
+                });
+                csv = csv.join('\r\n');
+                deferred.resolve(csv);
+                Rally.getApp().setLoading(false);
+            }
+        });
+        
+        return deferred.promise;
+    },
+    
+    _getHeadersFromGrid: function(grid) {
+        var headers = [];        
+        var columns = grid.columns;
+
+        Ext.Array.each(columns,function(column){
+            if ( column.dataIndex || column.renderer ) {
+                if ( column.csvText ) {
+                    headers.push(column.csvText);
+                } else if ( column.text )  {
+                    headers.push(column.text);
+                }
+            }
+        });
+        
+        return headers;
+    },
+    
+    _getColumnNamesFromGrid: function(grid) {
+        var names = [];
+        var columns = grid.columns;
+
+        Ext.Array.each(columns,function(column){
+            if ( column.dataIndex || column.renderer ) {
+                names.push(column.dataIndex);
+            }
+        });
+        
+        return names;
+    },
+    /*
+     * will render using your grid renderer.  If you want it to ignore the grid renderer, 
+     * have the column set _csvIgnoreRender: true
+     */
+    getCSVFromGrid:function(app, grid){
+        this.logger.log("Exporting grid with store type:", Ext.getClassName(grid.getStore()));
+        
+        if ( Ext.getClassName(grid.getStore()) != "Rally.data.custom.Store" ) {
+            return this._getCSVFromWsapiBackedGrid(grid);
+        }
+        
+        return this._getCSVFromCustomBackedGrid(grid);
+    },
+    _loadStorePage: function(grid, store, columns, page, total_pages){
+        var deferred = Ext.create('Deft.Deferred');
+
+        //this.logger.log("_loadStorePage", page, " of ", total_pages);
+        
+        store.loadPage(page, {
+            callback: function (records) {
+                Rally.getApp().setLoading(Ext.String.format('Page {0} of {1}',page, total_pages));
+                var csv = [];
+                for (var i = 0; i < records.length; i++) {
+                    var record = records[i];
+                    csv.push( this._getCSVFromRecord(record, grid, store) );
+                }
+                deferred.resolve(csv);
+            },
+            scope: this
+        });
+        return deferred.promise;
+    },
+    
+    _getCSVFromRecord: function(record, grid, store) {
+        var mock_meta_data = {
+            align: "right",
+            classes: [],
+            cellIndex: 9,
+            column: null,
+            columnIndex: 9,
+            innerCls: undefined,
+            recordIndex: 5,
+            rowIndex: 5,
+            style: "",
+            tdAttr: "",
+            tdCls: "x-grid-cell x-grid-td x-grid-cell-headerId-gridcolumn-1029 x-grid-cell-last x-unselectable",
+            unselectableAttr: "unselectable='on'"
+        };
+        
+        var node_values = [];
+        var columns = grid.columns;
+        
+        Ext.Array.each(columns, function (column) {
+            if (column.xtype != 'rallyrowactioncolumn') {
+                if (column.dataIndex) {
+                    var column_name = column.dataIndex;
+                    
+                    var display_value = record.get(column_name);
+
+                    if (!column._csvIgnoreRender && column.renderer) {
+                        if (column.exportRenderer) {
+                            display_value = column.exportRenderer(display_value, mock_meta_data, record, 0, 0, store, grid.getView());
+                        } else {
+                            display_value = column.renderer(display_value, mock_meta_data, record, 0, 0, store, grid.getView());
+                        }
+                    }
+                    node_values.push(display_value);
+                } else {
+                    var display_value = null;
+                    if (!column._csvIgnoreRender && column.renderer) {
+                        if (column.exportRenderer) {
+                            display_value = column.exportRenderer(display_value, mock_meta_data, record, record, 0, 0, store, grid.getView());
+                        } else {
+                            display_value = column.renderer(display_value, mock_meta_data, record, record, 0, 0, store, grid.getView());
+                        }
+                        node_values.push(display_value);
+                    }
+                }
+
+            }
+        }, this);
+        return '"' + node_values.join('","') + '"';
+    }
+
+});
+            
+               Rally.launchApp('TSTimeTrackingByActualsChange', {
+                   name: 'Time Tracking By Actuals Change'
+               });
+        });
+    </script>
+    
+    <style type="text/css">
+
+.app {
+}
+.tsinfolink {
+    position:absolute;
+    right:0px;
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    text-align: center;
+    color: white;
+    background: #C0C0C0;
+    border-style: solid;
+    border-width: 1px;
+    margin-top: 25px;
+    margin-right: 5px;
+    cursor: pointer;
+}
+    </style>
+
+</head>
+<body></body>
+</html>
